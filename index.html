@@ -1,0 +1,106 @@
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>HCP Intelligence</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<header>
+    <h1>HCP Intelligence</h1>
+    <p>AI-powered HCP Data Segmentation Platform</p>
+</header>
+
+<main>
+
+    <section class="card">
+
+        <h2>1. Upload Dataset</h2>
+
+        <p>Upload prescription or HCP datasets in CSV format.</p>
+
+        <input type="file" id="fileInput" accept=".csv">
+
+        <button onclick="uploadDataset()">
+            Upload and Analyse
+        </button>
+
+        <p id="uploadStatus"></p>
+
+    </section>
+
+    <section class="card" id="profileSection" hidden>
+
+        <h2>2. Data Quality Assessment</h2>
+
+        <div id="stats"></div>
+
+        <h3>Detected Schema</h3>
+
+        <div class="table-container">
+            <table>
+
+                <thead>
+                    <tr>
+                        <th>Column</th>
+                        <th>Type</th>
+                        <th>Missing</th>
+                        <th>Unique</th>
+                        <th>Role</th>
+                    </tr>
+                </thead>
+
+                <tbody id="schemaBody"></tbody>
+
+            </table>
+        </div>
+
+        <h3>Select Features</h3>
+
+        <div id="featureList"></div>
+
+        <label>
+            Number of clusters:
+
+            <input type="number" id="clusterCount" value="3" min="2">
+        </label>
+
+        <button onclick="runSegmentation()">
+            Run Segmentation
+        </button>
+
+    </section>
+
+    <section class="card" id="resultsSection" hidden>
+
+        <h2>3. Clustering Results</h2>
+
+        <div id="results"></div>
+
+        <h3>Adjust Feature Weights</h3>
+
+        <div id="weights"></div>
+
+        <button onclick="runSegmentation()">
+            Apply Changes & Rerun
+        </button>
+
+        <button onclick="downloadReport()">
+            Download Report
+        </button>
+
+    </section>
+
+</main>
+
+<script src="script.js"></script>
+
+</body>
+</html>
