@@ -133,19 +133,26 @@ def segment(request: SegmentRequest):
             detail="Select at least one feature."
         )
 
-    # Check that all selected features exist
+    # Only allow features approved by the data profiling stage
+    allowed_features = {
+        feature["column"]
+        for feature in item["profile"]["features"]
+    }
+
     invalid_features = [
         feature
         for feature in request.selected_features
-        if feature not in item["df"].columns
+        if feature not in allowed_features
     ]
 
     if invalid_features:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid features: {invalid_features}"
+            detail=(
+                "The following columns cannot be used for clustering: "
+                f"{invalid_features}"
+            )
         )
-
     # Validate feature weights
     for feature, weight in request.weights.items():
 
