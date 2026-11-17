@@ -4,388 +4,1140 @@ const API = "http://127.0.0.1:8000";
 let datasetId = null;
 let selectedFeatures = [];
 let currentWeights = {};
-let proposedWeights = null;
+let proposedWeights = {};
+
+
+// --------------------------------------------------
+// HELPER FUNCTIONS
+// --------------------------------------------------
+
+function escapeHTML(value) {
+
+    return String(value ?? "").replace(/[&<>"']/g, char => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+    })[char]);
+
+}
+
 
 async function apiRequest(url, options = {}) {
-    const response = await fetch(`${API}${url}`, options);
-    const data = await response.json();
+
+    const response = await fetch(url, options);
+
+    let data;
+
+    try {
+        data = await response.json();
+    } catch {
+        data = {};
+    }
 
     if (!response.ok) {
-        throw new Error(data.detail || "Something went wrong.");
+
+        throw new Error(
+            data.detail || data.message || "Something went wrong."
+        );
+
     }
 
     return data;
+
 }
 
+
+function setStatus(elementId, message, isError = false) {
+
+    const element = document.getElementById(elementId);
+
+    if (!element) return;
+
+    element.textContent = message;
+
+    element.style.color = isError ? "#dc2626" : "#475569";
+
+}
+
+
+// --------------------------------------------------
+// 1. UPLOAD DATASET
+// --------------------------------------------------
+
 async function uploadDataset() {
-    const file = document.getElementById("fileInput").files[0];
+
+    const fileInput = document.getElementById("fileInput");
+
+    const file = fileInput.files[0];
 
     if (!file) {
-        alert("Please select a CSV file.");
+
+        setStatus(
+            "uploadStatus",
+            "Please select a CSV file first.",
+            true
+        );
+
         return;
+
+    }
+
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+
+        setStatus(
+            "uploadStatus",
+            "Only CSV files are supported.",
+            true
+        );
+
+        return;
+
     }
 
     const formData = new FormData();
+
     formData.append("file", file);
 
-    document.getElementById("uploadStatus").innerText =
-        "Uploading dataset...";
-
     try {
-        const data = await apiRequest("/upload", {
-            method: "POST",
-            body: formData
-        });
+
+        setStatus(
+            "uploadStatus",
+            "Uploading and analysing dataset..."
+        );
+
+        const data = await apiRequest(
+            `${API}/upload`,
+            {
+                method: "POST",
+                body: formData
+            }
+        );
 
         datasetId = data.dataset_id;
+
         selectedFeatures = [];
+
         currentWeights = {};
-        proposedWeights = null;
+
+        proposedWeights = {};
+
+        document.getElementById("resultsSection").style.display = "none";
 
         showProfile(data.profile);
 
-        document.getElementById("uploadStatus").innerText =
-            "Dataset uploaded successfully!";
+        setStatus(
+            "uploadStatus",
+            `Successfully uploaded ${data.filename}.`
+        );
 
-        document.getElementById("resultsSection").hidden = true;
+        setStatus("profileStatus", "");
 
-        const aiSection = document.getElementById("aiSection");
-        if (aiSection) aiSection.hidden = true;
+        window.scrollTo({
+            top: document.getElementById("profileSection").offsetTop - 30,
+            behavior: "smooth"
+        });
 
     } catch (error) {
-        alert(error.message);
-        document.getElementById("uploadStatus").innerText =
-            "Upload failed.";
+
+        setStatus(
+            "uploadStatus",
+            error.message,
+            true
+        );
+
     }
+
 }
+
+
+// --------------------------------------------------
+// 2. DISPLAY DATA PROFILE
+// --------------------------------------------------
 
 function showProfile(profile) {
-    document.getElementById("profileSection").hidden = false;
+
+    const profileSection = document.getElementById("profileSection");
+
+    profileSection.style.display = "block";
+
+
+    // ----------------------------------------------
+    // DATA QUALITY STATISTICS
+    // ----------------------------------------------
 
     document.getElementById("stats").innerHTML = `
-        <div class="stat"><b>${profile.rows}</b><br>Rows</div>
-        <div class="stat"><b>${profile.total_columns}</b><br>Columns</div>
-        <div class="stat"><b>${profile.missing_cells}</b><br>Missing Cells</div>
-        <div class="stat"><b>${profile.duplicate_rows}</b><br>Duplicate Rows</div>
+
+        <div class="stat">
+            <h3>${profile.rows ?? 0}</h3>
+            <p>Total Records</p>
+        </div>
+
+        <div class="stat">
+            <h3>${profile.total_columns ?? 0}</h3>
+            <p>Total Columns</p>
+        </div>
+
+        <div class="stat">
+            <h3>${profile.missing_cells ?? 0}</h3>
+            <p>Missing Values</p>
+        </div>
+
+        <div class="stat">
+            <h3>${profile.duplicate_rows ?? 0}</h3>
+            <p>Duplicate Rows</p>
+        </div>
+
     `;
 
+
+    // ----------------------------------------------
+    // DATA SCHEMA TABLE
+    // ----------------------------------------------
+
     document.getElementById("schemaBody").innerHTML =
-        profile.columns.map(col => `
+
+        (profile.columns || []).map(column => `
+
             <tr>
-                <td>${col.column}</td>
-                <td>${col.type}</td>
-                <td>${col.missing}</td>
-                <td>${col.unique}</td>
-                <td>${col.role}</td>
+
+                <td>${escapeHTML(column.column)}</td>
+
+                <td>${escapeHTML(column.type)}</td>
+
+                <td>${column.missing ?? 0}</td>
+
+                <td>${column.unique ?? 0}</td>
+
+                <td>
+                    <span class="role-badge">
+                        ${escapeHTML(column.role)}
+                    </span>
+                </td>
+
             </tr>
+
         `).join("");
 
-    document.getElementById("featureList").innerHTML =
-        profile.features.map(feature => `
-            <label>
-                <input type="checkbox"
-                    value="${feature.column}"
-                    ${feature.type === "Numeric" ? "checked" : ""}>
-                ${feature.column}
-            </label><br>
-        `).join("");
+
+    // ----------------------------------------------
+    // EXCLUDED AND REFERENCE VARIABLES
+    // ----------------------------------------------
+
+    const referenceFields = profile.reference_fields || [];
+
+    const excludedLabels = profile.excluded_labels || [];
+
+    const reviewFields = profile.review_fields || [];
+
+    const excludedCount =
+        profile.excluded_count ??
+        (referenceFields.length + excludedLabels.length);
+
+    document.getElementById("excludedCount").textContent =
+        excludedCount;
+
+    document.getElementById("referenceCount").textContent =
+        profile.reference_count ?? referenceFields.length;
+
+    document.getElementById("excludedLabelCount").textContent =
+        profile.excluded_label_count ?? excludedLabels.length;
+
+
+    document.getElementById("referenceFields").textContent =
+        referenceFields.length
+            ? referenceFields.join(", ")
+            : "No reference fields detected";
+
+
+    document.getElementById("excludedLabels").textContent =
+        excludedLabels.length
+            ? excludedLabels.join(", ")
+            : "No excluded business labels detected";
+
+
+    document.getElementById("reviewFields").textContent =
+        reviewFields.length
+            ? reviewFields.join(", ")
+            : "No fields requiring review";
+
+
+    // ----------------------------------------------
+    // FEATURE SELECTION
+    // ----------------------------------------------
+
+    const featureList = document.getElementById("featureList");
+
+    const features = profile.features || [];
+
+    if (features.length === 0) {
+
+        featureList.innerHTML = `
+            <p>No eligible clustering features were detected.</p>
+        `;
+
+        return;
+
+    }
+
+    featureList.innerHTML = features.map((feature, index) => {
+
+        const checked = feature.type === "Numeric";
+
+        return `
+
+            <label class="feature-option">
+
+                <input
+                    type="checkbox"
+                    value="${escapeHTML(feature.column)}"
+                    ${checked ? "checked" : ""}
+                >
+
+                <span>${escapeHTML(feature.column)}</span>
+
+                <small>${escapeHTML(feature.type)}</small>
+
+            </label>
+
+        `;
+
+    }).join("");
+
+
+    // Default cluster count
+    document.getElementById("clusterCount").value = 3;
+
 }
 
+
+// --------------------------------------------------
+// 3. GET SELECTED FEATURES
+// --------------------------------------------------
+
+function getSelectedFeatures() {
+
+    return Array.from(
+        document.querySelectorAll(
+            "#featureList input[type='checkbox']:checked"
+        )
+    ).map(input => input.value);
+
+}
+
+
+// --------------------------------------------------
+// 4. RUN CLUSTERING
+// --------------------------------------------------
+
 async function runSegmentation() {
+
     if (!datasetId) {
-        alert("Upload a dataset first.");
+
+        alert("Please upload a dataset first.");
+
         return;
+
     }
 
-    selectedFeatures = [
-        ...document.querySelectorAll("#featureList input:checked")
-    ].map(input => input.value);
+    selectedFeatures = getSelectedFeatures();
 
-    if (!selectedFeatures.length) {
-        alert("Select at least one feature.");
+    if (selectedFeatures.length === 0) {
+
+        setStatus(
+            "profileStatus",
+            "Select at least one clustering feature.",
+            true
+        );
+
         return;
+
     }
 
+    const clusterCount = Number(
+        document.getElementById("clusterCount").value
+    );
+
+    if (
+        !Number.isInteger(clusterCount) ||
+        clusterCount < 2 ||
+        clusterCount > 20
+    ) {
+
+        setStatus(
+            "profileStatus",
+            "Cluster count must be between 2 and 20.",
+            true
+        );
+
+        return;
+
+    }
+
+
+    // Initialize default weights for newly selected features
     selectedFeatures.forEach(feature => {
-        const slider = document.getElementById("weight_" + feature);
 
-        if (slider) {
-            currentWeights[feature] = Number(slider.value);
-        } else if (currentWeights[feature] === undefined) {
+        if (currentWeights[feature] === undefined) {
             currentWeights[feature] = 1;
         }
+
     });
 
-    const weights = {};
-    selectedFeatures.forEach(feature => {
-        weights[feature] = currentWeights[feature] ?? 1;
-    });
+
+    const requestBody = {
+
+        dataset_id: datasetId,
+
+        selected_features: selectedFeatures,
+
+        weights: Object.fromEntries(
+            selectedFeatures.map(feature => [
+                feature,
+                Number(currentWeights[feature] ?? 1)
+            ])
+        ),
+
+        n_clusters: clusterCount
+
+    };
+
 
     try {
-        const data = await apiRequest("/segment", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                dataset_id: datasetId,
-                selected_features: selectedFeatures,
-                weights: weights,
-                n_clusters: Number(
-                    document.getElementById("clusterCount").value
-                )
-            })
-        });
+
+        setStatus(
+            "profileStatus",
+            "Running clustering algorithms..."
+        );
+
+        setStatus("resultStatus", "");
+
+        const data = await apiRequest(
+            `${API}/segment`,
+            {
+                method: "POST",
+
+                headers: {
+                    "Content-Type": "application/json"
+                },
+
+                body: JSON.stringify(requestBody)
+            }
+        );
+
 
         showResults(data);
 
-        const aiSection = document.getElementById("aiSection");
-        if (aiSection) aiSection.hidden = false;
+        document.getElementById("resultsSection").style.display = "block";
 
-        const analysisOutput = document.getElementById("aiAnalysis");
-        if (analysisOutput) {
-            analysisOutput.innerText =
-                "Segmentation updated. Run AI Analysis again to refresh the explanation.";
-        }
+        setStatus(
+            "profileStatus",
+            "Segmentation completed successfully."
+        );
 
-        proposedWeights = null;
-        const proposal = document.getElementById("proposal");
-        if (proposal) proposal.hidden = true;
+        setStatus(
+            "resultStatus",
+            "Results generated. You can now explore AI analysis and feature adjustments."
+        );
+
+        // Clear previous AI output and suggestions
+        const analysis = document.getElementById("aiAnalysis");
+
+        const suggestion = document.getElementById("aiSuggestion");
+
+        if (analysis) analysis.textContent = "";
+
+        if (suggestion) suggestion.textContent = "";
+
+        proposedWeights = {};
+
+        window.scrollTo({
+            top: document.getElementById("resultsSection").offsetTop - 30,
+            behavior: "smooth"
+        });
 
     } catch (error) {
-        alert(error.message);
+
+        setStatus(
+            "profileStatus",
+            error.message,
+            true
+        );
+
     }
+
 }
+
+
+// --------------------------------------------------
+// 5. DISPLAY CLUSTERING RESULTS
+// --------------------------------------------------
 
 function showResults(data) {
-    document.getElementById("resultsSection").hidden = false;
 
-    document.getElementById("results").innerHTML =
-        data.methods.map(method => `
-            <div class="result-card">
-                <h3>${method.method}</h3>
-                <h2>Silhouette Score: ${method.silhouette ?? "N/A"}</h2>
-                <p>Clusters: ${method.clusters}</p>
-                <p>Cluster sizes: ${JSON.stringify(method.cluster_sizes)}</p>
-            </div>
-        `).join("");
+    const resultsContainer = document.getElementById("results");
 
-    document.getElementById("results").innerHTML += `
-        <h3>Best method by Silhouette Score:
-        ${data.best_method || "Not available"}</h3>
-    `;
+    const methods = data.methods || [];
 
-    document.getElementById("weights").innerHTML =
-        selectedFeatures.map(feature => `
-            <div class="weight-row">
-                <label>${feature}</label>
-                <input
-                    type="range"
-                    id="weight_${feature}"
-                    min="0"
-                    max="2"
-                    step="0.1"
-                    value="${currentWeights[feature] ?? 1}"
-                    oninput="updateWeight('${feature}', this.value)">
-                <span id="value_${feature}">
-                    ${currentWeights[feature] ?? 1}
-                </span>
-            </div>
-        `).join("");
-}
+    const bestMethod = data.best_method;
 
-function updateWeight(feature, value) {
-    currentWeights[feature] = Number(value);
 
-    const display = document.getElementById("value_" + feature);
-    if (display) display.innerText = value;
-}
+    if (methods.length === 0) {
 
-// AI analysis of actual clustering results
-async function runAIAnalysis() {
-    if (!datasetId) return;
+        resultsContainer.innerHTML = `
+            <p>No clustering results were returned.</p>
+        `;
 
-    const output = document.getElementById("aiAnalysis");
-    output.innerText = "AI is analysing the clustering results...";
-
-    try {
-        const data = await apiRequest(`/analyze/${datasetId}`);
-
-        output.innerText = data.analysis || "No analysis was returned.";
-
-    } catch (error) {
-        output.innerText = "AI analysis failed: " + error.message;
-    }
-}
-
-// Convert a business instruction into proposed feature weights
-async function suggestChanges() {
-    const instruction = document.getElementById("aiInstruction").value.trim();
-
-    if (!instruction) {
-        alert("Please enter an instruction.");
         return;
+
     }
 
-    if (!datasetId) {
-        alert("Upload a dataset and run segmentation first.");
-        return;
-    }
 
-    const output = document.getElementById("proposalOutput");
-    output.innerText = "AI is preparing your proposed changes...";
+    // ----------------------------------------------
+    // ALGORITHM RESULTS
+    // ----------------------------------------------
 
-    document.getElementById("proposal").hidden = false;
-    document.getElementById("approveChanges").disabled = true;
+    resultsContainer.innerHTML = `
 
-    try {
-        const weights = {};
-        selectedFeatures.forEach(feature => {
-            weights[feature] = currentWeights[feature] ?? 1;
-        });
+        <div class="result-summary">
 
-        const data = await apiRequest("/suggest-adjustments", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                dataset_id: datasetId,
-                instruction: instruction,
-                selected_features: selectedFeatures,
-                current_weights: weights
-            })
-        });
+            <h3>Best Performing Algorithm</h3>
 
-        proposedWeights = data.proposed_weights;
+            <p>
+                ${escapeHTML(bestMethod || "No valid model found")}
+            </p>
 
-        output.innerText =
-            (data.explanation || "Proposed changes:") +
-            "\n\n" +
-            Object.entries(proposedWeights)
-                .map(([feature, weight]) => `${feature}: ${weight}`)
-                .join("\n");
+            <p class="card-description">
+                The best algorithm is selected using the
+                highest valid silhouette score.
+            </p>
 
-        document.getElementById("approveChanges").disabled = false;
-
-    } catch (error) {
-        proposedWeights = null;
-        output.innerText = "Could not prepare changes: " + error.message;
-    }
-}
-
-// Apply only after the user explicitly approves
-async function approveChanges() {
-    if (!proposedWeights) return;
-
-    Object.entries(proposedWeights).forEach(([feature, weight]) => {
-        currentWeights[feature] = Number(weight);
-    });
-
-    Object.entries(proposedWeights).forEach(([feature, weight]) => {
-        const slider = document.getElementById("weight_" + feature);
-        const display = document.getElementById("value_" + feature);
-
-        if (slider) slider.value = weight;
-        if (display) display.innerText = weight;
-    });
-
-    proposedWeights = null;
-
-    document.getElementById("proposal").hidden = true;
-
-    await runSegmentation();
-}
-
-async function downloadReport() {
-    if (!datasetId) return;
-
-    try {
-        const response = await fetch(`${API}/report/${datasetId}`);
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || "Report download failed.");
-        }
-
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-
-        link.href = url;
-        link.download = "hcp_segmentation_report.xlsx";
-        link.click();
-
-        URL.revokeObjectURL(url);
-
-    } catch (error) {
-        alert(error.message);
-    }
-}
-
-// Create the AI interface without requiring changes to index.html
-function addAISection() {
-    if (document.getElementById("aiSection")) return;
-
-    const section = document.createElement("section");
-    section.id = "aiSection";
-    section.hidden = true;
-
-    section.innerHTML = `
-        <hr>
-        <h2>4. AI-Powered Business Analysis</h2>
-
-        <p>
-            Understand the segmentation results, compare the
-            three techniques and get business recommendations.
-        </p>
-
-        <button onclick="runAIAnalysis()">
-            Generate AI Analysis
-        </button>
-
-        <div id="aiAnalysis"
-             style="white-space:pre-wrap; margin-top:15px;">
         </div>
 
-        <hr>
 
-        <h3>Refine Segmentation Using Natural Language</h3>
+        <div class="result-grid">
 
-        <p>
-            Describe how you want the segmentation to change.
+            ${methods.map(method => {
+
+                const isBest = method.method === bestMethod;
+
+                const sizes = method.cluster_sizes || {};
+
+                const clusterDetails = Object.entries(sizes)
+                    .map(([name, count]) => `
+                        <div>
+                            <strong>${escapeHTML(name)}:</strong>
+                            ${count} HCPs
+                        </div>
+                    `)
+                    .join("");
+
+                return `
+
+                    <div class="result-card ${isBest ? "best" : ""}">
+
+                        <h3>
+                            ${escapeHTML(method.method)}
+                            ${isBest ? " ⭐" : ""}
+                        </h3>
+
+                        <div class="result-metrics">
+
+                            <span>
+                                <strong>Silhouette:</strong>
+                                ${method.silhouette ?? "N/A"}
+                            </span>
+
+                            <span>
+                                <strong>Clusters:</strong>
+                                ${method.clusters ?? 0}
+                            </span>
+
+                            <span>
+                                <strong>Noise:</strong>
+                                ${method.noise_points ?? 0}
+                            </span>
+
+                        </div>
+
+                        <div class="cluster-details">
+
+                            <h4>Cluster Distribution</h4>
+
+                            ${clusterDetails || "No cluster distribution available"}
+
+                        </div>
+
+                        ${
+                            method.error
+                            ? `<p class="result-error">${escapeHTML(method.error)}</p>`
+                            : ""
+                        }
+
+                    </div>
+
+                `;
+
+            }).join("")}
+
+        </div>
+
+    `;
+
+
+    // ----------------------------------------------
+    // ELBOW ANALYSIS
+    // ----------------------------------------------
+
+    const elbow = data.elbow_analysis || {};
+
+    if (elbow.tested_values?.length) {
+
+        resultsContainer.innerHTML += `
+
+            <div class="section-heading">
+
+                <h3>Optimal Cluster Analysis</h3>
+
+                <p class="card-description">
+                    K-Means was evaluated across different
+                    cluster counts.
+                </p>
+
+            </div>
+
+            <div class="schema-table-wrapper">
+
+                <table>
+
+                    <thead>
+
+                        <tr>
+                            <th>Number of Clusters</th>
+                            <th>Inertia</th>
+                            <th>Silhouette Score</th>
+                        </tr>
+
+                    </thead>
+
+                    <tbody>
+
+                        ${elbow.tested_values.map(item => `
+
+                            <tr>
+
+                                <td>${item.k}</td>
+
+                                <td>${item.inertia}</td>
+
+                                <td>${item.silhouette ?? "N/A"}</td>
+
+                            </tr>
+
+                        `).join("")}
+
+                    </tbody>
+
+                </table>
+
+            </div>
+
+            <p class="selection-note">
+                Elbow suggestion:
+                ${elbow.suggested_k_by_elbow ?? "Not available"}
+                &nbsp; | &nbsp;
+                Best silhouette K:
+                ${elbow.best_k_by_silhouette ?? "Not available"}
+            </p>
+
+        `;
+
+    }
+
+
+    // ----------------------------------------------
+    // CROSS-MODEL COMPARISON
+    // ----------------------------------------------
+
+    const comparison = data.assignment_comparison || {};
+
+    if (
+        comparison.kmeans_hierarchical_same_partition !== undefined
+    ) {
+
+        resultsContainer.innerHTML += `
+
+            <div class="section-heading">
+
+                <h3>Model Agreement</h3>
+
+                <p class="card-description">
+                    Comparison of K-Means and Hierarchical
+                    cluster membership.
+                </p>
+
+                <p>
+                    Same partition:
+                    <strong>
+                        ${
+                            comparison.kmeans_hierarchical_same_partition
+                                ? "Yes"
+                                : "No"
+                        }
+                    </strong>
+                </p>
+
+            </div>
+
+        `;
+
+    }
+
+
+    // ----------------------------------------------
+    // FEATURE WEIGHT SLIDERS
+    // ----------------------------------------------
+
+    renderWeights();
+
+}
+
+
+// --------------------------------------------------
+// 6. RENDER FEATURE WEIGHTS
+// --------------------------------------------------
+
+function renderWeights() {
+
+    const weightContainer = document.getElementById("weights");
+
+    if (!selectedFeatures.length) {
+
+        weightContainer.innerHTML = "";
+
+        return;
+
+    }
+
+    weightContainer.innerHTML = selectedFeatures.map(feature => {
+
+        const weight = Number(currentWeights[feature] ?? 1);
+
+        return `
+
+            <div class="weight-item">
+
+                <div class="weight-item-header">
+
+                    <strong>${escapeHTML(feature)}</strong>
+
+                    <span id="weightValue-${escapeHTML(feature)}">
+                        ${weight.toFixed(1)}
+                    </span>
+
+                </div>
+
+                <input
+                    type="range"
+                    min="0"
+                    max="5"
+                    step="0.1"
+                    value="${weight}"
+                    data-feature="${escapeHTML(feature)}"
+                    class="feature-weight-slider"
+                >
+
+            </div>
+
+        `;
+
+    }).join("");
+
+
+    document.querySelectorAll(".feature-weight-slider")
+        .forEach(slider => {
+
+            slider.addEventListener("input", function () {
+
+                const feature = this.dataset.feature;
+
+                const value = Number(this.value);
+
+                updateWeight(feature, value);
+
+                const valueElement = document.getElementById(
+                    `weightValue-${feature}`
+                );
+
+                if (valueElement) {
+                    valueElement.textContent = value.toFixed(1);
+                }
+
+            });
+
+        });
+
+}
+
+
+// --------------------------------------------------
+// 7. UPDATE FEATURE WEIGHT
+// --------------------------------------------------
+
+function updateWeight(feature, value) {
+
+    currentWeights[feature] = Number(value);
+
+}
+
+
+// --------------------------------------------------
+// 8. CREATE AI SECTION
+// --------------------------------------------------
+
+function addAISection() {
+
+    const resultsSection = document.getElementById("resultsSection");
+
+    if (document.getElementById("aiSection")) return;
+
+    const section = document.createElement("div");
+
+    section.id = "aiSection";
+
+    section.className = "ai-panel";
+
+    section.innerHTML = `
+
+        <div class="section-label">STEP 04</div>
+
+        <h2>AI-Powered Segmentation Insights</h2>
+
+        <p class="card-description">
+            Use Gemini AI to interpret clustering results
+            and explore possible feature-weight adjustments.
         </p>
+
+
+        <div class="ai-buttons">
+
+            <button
+                type="button"
+                onclick="runAIAnalysis()"
+            >
+                Generate AI Analysis
+            </button>
+
+        </div>
+
+        <div
+            id="aiAnalysis"
+            class="ai-output"
+        ></div>
+
+
+        <div class="section-heading">
+
+            <h3>Natural Language Feature Adjustment</h3>
+
+            <p class="card-description">
+                Describe how you want the segmentation to change.
+                AI will suggest updated feature weights.
+            </p>
+
+        </div>
+
 
         <textarea
             id="aiInstruction"
-            rows="3"
-            style="width:100%;"
-            placeholder="Example: Give more importance to prescription volume than engagement.">
-        </textarea>
+            placeholder="Example: Give more importance to prescription volume and engagement score."
+        ></textarea>
 
-        <br><br>
 
-        <button onclick="suggestChanges()">
-            Ask AI to Suggest Changes
-        </button>
+        <div class="ai-buttons">
 
-        <div id="proposal" hidden style="margin-top:15px;">
-            <h3>Review Proposed Changes</h3>
-
-            <div id="proposalOutput"
-                 style="white-space:pre-wrap;"></div>
-
-            <br>
-
-            <button id="approveChanges"
-                    onclick="approveChanges()"
-                    disabled>
-                Approve Changes & Rerun Segmentation
+            <button
+                type="button"
+                onclick="suggestChanges()"
+            >
+                Generate Weight Suggestions
             </button>
+
+            <button
+                type="button"
+                onclick="approveChanges()"
+            >
+                Apply Suggested Weights & Re-run
+            </button>
+
         </div>
+
+
+        <div
+            id="aiSuggestion"
+            class="ai-output"
+        ></div>
+
     `;
 
-    document.getElementById("resultsSection").appendChild(section);
+    resultsSection.appendChild(section);
+
 }
 
-document.addEventListener("DOMContentLoaded", addAISection);
+
+// --------------------------------------------------
+// 9. RUN AI ANALYSIS
+// --------------------------------------------------
+
+async function runAIAnalysis() {
+
+    if (!datasetId) return;
+
+    const output = document.getElementById("aiAnalysis");
+
+    output.textContent = "Generating AI analysis...";
+
+    try {
+
+        const data = await apiRequest(
+            `${API}/analyze/${datasetId}`
+        );
+
+        output.textContent =
+            typeof data.analysis === "string"
+                ? data.analysis
+                : JSON.stringify(data.analysis, null, 2);
+
+    } catch (error) {
+
+        output.textContent = `AI analysis failed: ${error.message}`;
+
+    }
+
+}
+
+
+// --------------------------------------------------
+// 10. SUGGEST FEATURE WEIGHT CHANGES
+// --------------------------------------------------
+
+async function suggestChanges() {
+
+    if (!datasetId) return;
+
+    const instruction = document.getElementById(
+        "aiInstruction"
+    ).value.trim();
+
+    const output = document.getElementById("aiSuggestion");
+
+    if (instruction.length < 3) {
+
+        output.textContent =
+            "Please enter an instruction describing the changes you want.";
+
+        return;
+
+    }
+
+    if (!selectedFeatures.length) {
+
+        output.textContent =
+            "Please run segmentation first.";
+
+        return;
+
+    }
+
+    output.textContent = "Generating feature-weight suggestions...";
+
+    try {
+
+        const data = await apiRequest(
+            `${API}/suggest-adjustments`,
+            {
+
+                method: "POST",
+
+                headers: {
+                    "Content-Type": "application/json"
+                },
+
+                body: JSON.stringify({
+
+                    dataset_id: datasetId,
+
+                    instruction: instruction,
+
+                    selected_features: selectedFeatures,
+
+                    current_weights: currentWeights
+
+                })
+
+            }
+        );
+
+
+        proposedWeights = data.proposed_weights || {};
+
+
+        output.textContent =
+
+            (data.explanation || "AI suggestions generated.") +
+
+            "\n\nProposed Feature Weights:\n" +
+
+            Object.entries(proposedWeights)
+                .map(([feature, weight]) =>
+                    `${feature}: ${weight}`
+                )
+                .join("\n");
+
+
+    } catch (error) {
+
+        output.textContent =
+            `Could not generate suggestions: ${error.message}`;
+
+    }
+
+}
+
+
+// --------------------------------------------------
+// 11. APPLY AI-SUGGESTED WEIGHTS
+// --------------------------------------------------
+
+async function approveChanges() {
+
+    if (!Object.keys(proposedWeights).length) {
+
+        setStatus(
+            "resultStatus",
+            "Generate AI weight suggestions first.",
+            true
+        );
+
+        return;
+
+    }
+
+
+    // Apply only suggestions for selected features
+    selectedFeatures.forEach(feature => {
+
+        if (proposedWeights[feature] !== undefined) {
+
+            const weight = Number(proposedWeights[feature]);
+
+            if (Number.isFinite(weight)) {
+
+                currentWeights[feature] = Math.min(
+                    5,
+                    Math.max(0, weight)
+                );
+
+            }
+
+        }
+
+    });
+
+
+    // Update sliders visually
+    renderWeights();
+
+
+    // Run clustering with the updated weights
+    await runSegmentation();
+
+}
+
+
+// --------------------------------------------------
+// 12. DOWNLOAD EXCEL REPORT
+// --------------------------------------------------
+
+async function downloadReport() {
+
+    if (!datasetId) {
+
+        alert("Please run segmentation first.");
+
+        return;
+
+    }
+
+    try {
+
+        setStatus(
+            "resultStatus",
+            "Preparing Excel report..."
+        );
+
+        const response = await fetch(
+            `${API}/report/${datasetId}`
+        );
+
+        if (!response.ok) {
+
+            let errorData = {};
+
+            try {
+                errorData = await response.json();
+            } catch {}
+
+            throw new Error(
+                errorData.detail || "Could not download report."
+            );
+
+        }
+
+        const blob = await response.blob();
+
+        const url = window.URL.createObjectURL(blob);
+
+        const link = document.createElement("a");
+
+        link.href = url;
+
+        link.download = "hcp_segmentation_report.xlsx";
+
+        document.body.appendChild(link);
+
+        link.click();
+
+        link.remove();
+
+        window.URL.revokeObjectURL(url);
+
+
+        setStatus(
+            "resultStatus",
+            "Excel report downloaded successfully."
+        );
+
+    } catch (error) {
+
+        setStatus(
+            "resultStatus",
+            error.message,
+            true
+        );
+
+    }
+
+}
+
+
+// --------------------------------------------------
+// 13. INITIALIZE
+// --------------------------------------------------
+
+document.addEventListener("DOMContentLoaded", function () {
+
+    addAISection();
+
+});
